@@ -1,25 +1,29 @@
 # --- IMPORTS ---
-import streamlit as st
 import os
 import time
-import requests
-import pandas as pd
-import google.generativeai as genai
-import plotly.express as px
-from collections import Counter
 import json
-from bs4 import BeautifulSoup
+import requests
+import warnings
+from typing import Dict, Any, Optional, List, Tuple
+from collections import Counter
 from urllib.parse import urlparse, urljoin, quote_plus
+
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import google.generativeai as genai
+
 import nltk
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
+from nltk.tokenize import word_tokenize
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+
 import textstat
 import extruct
 from w3lib.html import get_base_url
-import warnings
-from typing import Dict, Any, Optional, List, Tuple
+from bs4 import BeautifulSoup
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -36,7 +40,7 @@ CONFIG = {
     "app": {
         "title": "AI SEO Analyst",
         "icon": "🔮",
-        "version": "14.2", # Version bump for f-string fix
+        "version": "14.3", # Version bump for prompt fix
     },
     "theme": {
         "bg_color": "#f0f2f6",
@@ -69,7 +73,13 @@ CONFIG = {
 
 @st.cache_resource
 def setup_nltk():
-    resources = [("punkt", "tokenizers/punkt"), ("stopwords", "corpora/stopwords"), ("wordnet", "corpora/wordnet"), ("averaged_perceptron_tagger", "taggers/averaged_perceptron_tagger")]
+    """Downloads all necessary NLTK data models if not already present."""
+    resources = [
+        ("punkt", "tokenizers/punkt"),
+        ("stopwords", "corpora/stopwords"),
+        ("wordnet", "corpora/wordnet"),
+        ("averaged_perceptron_tagger", "taggers/averaged_perceptron_tagger")
+    ]
     for resource_id, path in resources:
         try:
             nltk.data.find(path)
@@ -79,12 +89,14 @@ def setup_nltk():
 
 @st.cache_resource
 def configure_ai():
+    """Configures the Gemini API key and tests the connection."""
     api_key = st.secrets.get("GEMINI_API_KEY")
     if api_key:
         try:
             genai.configure(api_key=api_key)
-            # Test a small call to ensure API is working
-            genai.get_model('gemini-1.5-flash').generate_content("test", timeout=5)
+            # Test a small call to ensure API is working by using GenerativeModel
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            model.generate_content("test", request_options={'timeout': 5})
             return True
         except Exception as e:
             st.error(f"Failed to configure AI or connect to Gemini API. Please check your `GEMINI_API_KEY` in `secrets.toml`. Error: {e}", icon="🔑")
@@ -93,6 +105,7 @@ def configure_ai():
     return False
 
 def init_session_state():
+    """Initializes session state variables."""
     defaults = {
         'analysis_results': None,
         'page': "🏠 Home",
@@ -191,7 +204,7 @@ class SEOAuditor:
         main_content_area = self.soup.find('main') or self.soup.find('article') or self.soup.body
         text = main_content_area.get_text(separator=' ', strip=True) if main_content_area else ""
         
-        words = [self.lemmatizer.lemmatize(word) for word in nltk.word_tokenize(text.lower()) if word.isalpha()]
+        words = [self.lemmatizer.lemmatize(word) for word in word_tokenize(text.lower()) if word.isalpha()]
         filtered_words = [word for word in words if word not in self.stop_words_set]
         
         images = self.soup.find_all('img')
@@ -301,16 +314,20 @@ def extract_text_from_url(url: str) -> Optional[str]:
         return None
 
 def perform_semantic_analysis(text: str, model, target_keywords: List[str] = None) -> Dict[str, Any]:
-    """Performs semantic analysis using NLTK/spaCy (simulated by LLM for now) and LLM."""
+    """Performs semantic analysis using an LLM."""
     if not text:
         return {"summary": "No content to analyze.", "entities": [], "lsi_keywords": [], "readability_score": 0}
 
     readability_score = textstat.flesch_reading_ease(text)
 
-    # Corrected f-string with escaped curly braces where not interpolating
     prompt_keywords_section = ""
     if target_keywords:
         prompt_keywords_section = f"4. Additionally, check if the following target keywords are covered well in the text: {', '.join(target_keywords)}. Comment on their presence and semantic relevance."
+
+    # Conditionally create the list of keys for the JSON output instruction
+    keys_for_json = "'summary', 'entities', 'lsi_keywords'"
+    if target_keywords:
+        keys_for_json += ", 'keyword_coverage'"
 
     prompt = f"""
     As an expert SEO analyst, analyze the following text for semantic SEO. Provide:
@@ -318,7 +335,8 @@ def perform_semantic_analysis(text: str, model, target_keywords: List[str] = Non
     2. A list of key entities (people, places, organizations, concepts) mentioned.
     3. A list of suggested LSI (Latent Semantic Indexing) keywords that are contextually related to the text, aiming for 5-10 distinct terms.
     {prompt_keywords_section}
-    Present the output as a JSON object with keys: 'summary', 'entities', 'lsi_keywords'{{', 'keyword_coverage' if target_keywords else ''}}.
+    
+    Present the output as a single, valid JSON object with the following keys ONLY: {keys_for_json}.
     
     Text to analyze:
     {text[:4000]}
@@ -344,7 +362,6 @@ def generate_structure_suggestions(text: str, model) -> str:
     if not text:
         return "No content provided for structure optimization."
 
-    # Corrected f-string with escaped curly braces
     prompt = f"""
     As a content editor specializing in on-page SEO, analyze the structure of the following text.
     Provide a rewritten version of the text with an optimized structure. Your suggestions should focus on:
@@ -405,7 +422,7 @@ def get_content_similarity(text1: str, text2: str) -> float:
 
     lemmatizer = WordNetLemmatizer()
     def custom_tokenizer(text):
-        return [lemmatizer.lemmatize(w) for w in nltk.word_tokenize(text) if w.isalpha()]
+        return [lemmatizer.lemmatize(w) for w in word_tokenize(text) if w.isalpha()]
 
     vectorizer = TfidfVectorizer(stop_words='english', lowercase=True,
                                  tokenizer=custom_tokenizer)
@@ -467,11 +484,11 @@ def home_page():
 
             main_auditor = None
             with st.spinner("Step 1/3: Performing Core SEO Audit... 🕵️‍♀️"):
-                if url_input:
-                    main_auditor = SEOAuditor(url=url_input)
-                    st.session_state.analysis_results = main_auditor.run_audit()
-                elif html_input:
+                if html_input: # Prioritize HTML input
                     main_auditor = SEOAuditor(html_content=html_input)
+                    st.session_state.analysis_results = main_auditor.run_audit()
+                elif url_input:
+                    main_auditor = SEOAuditor(url=url_input)
                     st.session_state.analysis_results = main_auditor.run_audit()
                 
                 if not st.session_state.analysis_results:
@@ -501,7 +518,7 @@ def home_page():
                         serp_competitors.extend(get_serp_competitor_urls(kw, num_results=2))
                     for u in serp_competitors:
                         if u not in comparison_urls and len(competitor_urls) < 3:
-                             competitor_urls.append(u)
+                            competitor_urls.append(u)
 
                 final_competitor_urls = list(set(competitor_urls))[:3]
                 comparison_urls.extend(final_competitor_urls)
@@ -721,7 +738,6 @@ def keyword_research_page():
             with st.spinner("AI is performing keyword research..."):
                 try:
                     model = genai.GenerativeModel('gemini-1.5-flash')
-                    # Escape curly braces in the prompt template that are not for interpolation
                     prompt = f"""
                     Act as a keyword research expert. For the seed keyword '{seed_keyword}', generate:
                     1. A list of 20+ related keywords.
@@ -763,7 +779,6 @@ def content_rewriter_page():
             with st.spinner(f"AI is rewriting in a {style} style..."):
                 try:
                     model = genai.GenerativeModel('gemini-1.5-flash')
-                    # Ensure no unescaped curly braces in the prompt
                     prompt = f"Rewrite the following text in 3 different variations of a '{style}' tone. Present as a JSON object with keys 'variation_1', 'variation_2', 'variation_3'.\n\nText:\n{text_to_rewrite}"
                     response = model.generate_content(prompt)
                     json_response = response.text.strip()
@@ -907,7 +922,6 @@ def ai_copilot_page():
 
                     context = "\n\n".join(context_parts) if context_parts else "No specific audit data available. Please run an analysis first."
 
-                    # Ensure curly braces in the prompt template that are not for interpolation are escaped
                     full_prompt = f"You are an expert SEO analyst. Based on the following available data (if any), answer the user's question. Provide actionable and concise SEO advice. If specific data is missing for the user's query, state that you need more information.\n\n---Available Data---\n{context}\n\n---User's Question---\n{prompt}"
                     
                     response = model.generate_content(full_prompt)
@@ -922,7 +936,7 @@ def semantic_analysis_page():
     st.title("🧠 Semantic Analysis (Stand-alone)")
     st.warning("This page is mainly for direct access. Semantic analysis is automatically performed during the full 'Home' page analysis.", icon="ℹ️")
     if st.session_state.get('semantic_results'):
-        with st.expander("View Last Semantic Analysis Results"):
+        with st.expander("View Last Semantic Analysis Results", expanded=True):
             sem_res = st.session_state.semantic_results
             st.subheader("Content Topic Summary")
             st.info(sem_res.get('summary', 'No summary available.'))
@@ -944,7 +958,7 @@ def structure_optimizer_page():
     st.title("📐 Structure Optimizer (Stand-alone)")
     st.warning("This page is mainly for direct access. Structure optimization is automatically performed during the full 'Home' page analysis.", icon="ℹ️")
     if st.session_state.get('structure_results'):
-        with st.expander("View Last Structure Optimization Suggestions"):
+        with st.expander("View Last Structure Optimization Suggestions", expanded=True):
             st.subheader("Optimized Content Structure (Markdown)")
             st.markdown(st.session_state.structure_results)
             st.info("Copy and paste this markdown into your content editor. Review for accuracy and flow.", icon="📝")
@@ -955,45 +969,45 @@ def competitor_analysis_page():
     st.title("🔍 Competitor Analysis (Stand-alone)")
     st.warning("This page is mainly for direct access. Competitor analysis is automatically performed during the full 'Home' page analysis if URLs are provided.", icon="ℹ️")
     if st.session_state.get('competitor_results'):
-        comp_results_df = pd.DataFrame(st.session_state.competitor_results)
-        if not comp_results_df.empty:
-            st.subheader("Key SEO Metrics Comparison")
-            display_df = comp_results_df.drop(columns=['Main Content Text'], errors='ignore')
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
+        with st.expander("View Last Competitor Analysis Results", expanded=True):
+            comp_results_df = pd.DataFrame(st.session_state.competitor_results)
+            if not comp_results_df.empty:
+                st.subheader("Key SEO Metrics Comparison")
+                display_df = comp_results_df.drop(columns=['Main Content Text'], errors='ignore')
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-            if "SEO Score" in comp_results_df.columns:
-                st.subheader("SEO Score Comparison")
-                fig = px.bar(comp_results_df, x='URL', y='SEO Score', title='SEO Score vs. Competitors', color='URL')
-                st.plotly_chart(fig, use_container_width=True)
-            
-            if "Word Count" in comp_results_df.columns:
-                st.subheader("Word Count Comparison")
-                fig = px.bar(comp_results_df, x='URL', y='Word Count', title='Word Count vs. Competitors', color='URL')
-                st.plotly_chart(fig, use_container_width=True)
-
-            if len(comp_results_df) > 1 and 'Main Content Text' in comp_results_df.columns:
-                st.subheader("Content Similarity (Target vs. Competitors)")
-                your_url = comp_results_df.iloc[0]['URL']
-                your_content = comp_results_df.iloc[0]['Main Content Text']
-                similarity_data = []
-
-                for i in range(1, len(comp_results_df)):
-                    comp_url = comp_results_df.iloc[i]['URL']
-                    comp_content = comp_results_df.iloc[i]['Main Content Text']
-                    if your_content and comp_content:
-                        similarity = get_content_similarity(your_content, comp_content)
-                        similarity_data.append({"Competitor URL": comp_url, "Similarity Score": similarity})
-                    else:
-                        similarity_data.append({"Competitor URL": comp_url, "Similarity Score": "N/A (content not available)"})
+                if "SEO Score" in comp_results_df.columns:
+                    st.subheader("SEO Score Comparison")
+                    fig = px.bar(comp_results_df, x='URL', y='SEO Score', title='SEO Score vs. Competitors', color='URL')
+                    st.plotly_chart(fig, use_container_width=True)
                 
-                if similarity_data:
-                    sim_df = pd.DataFrame(similarity_data)
-                    st.dataframe(sim_df, use_container_width=True, hide_index=True)
-                    st.info("Higher similarity scores indicate more overlapping topics/keywords.", icon="💡")
-                else:
-                    st.info("Could not calculate content similarity (insufficient content or URLs).")
-        else:
-            st.info("No competitor data available for comparison.")
+                if "Word Count" in comp_results_df.columns:
+                    st.subheader("Word Count Comparison")
+                    fig = px.bar(comp_results_df, x='URL', y='Word Count', title='Word Count vs. Competitors', color='URL')
+                    st.plotly_chart(fig, use_container_width=True)
+
+                if len(comp_results_df) > 1 and 'Main Content Text' in comp_results_df.columns:
+                    st.subheader("Content Similarity (Target vs. Competitors)")
+                    your_content = comp_results_df.iloc[0]['Main Content Text']
+                    similarity_data = []
+
+                    for i in range(1, len(comp_results_df)):
+                        comp_url = comp_results_df.iloc[i]['URL']
+                        comp_content = comp_results_df.iloc[i]['Main Content Text']
+                        if your_content and comp_content:
+                            similarity = get_content_similarity(your_content, comp_content)
+                            similarity_data.append({"Competitor URL": comp_url, "Similarity Score": similarity})
+                        else:
+                            similarity_data.append({"Competitor URL": comp_url, "Similarity Score": "N/A (content not available)"})
+                    
+                    if similarity_data:
+                        sim_df = pd.DataFrame(similarity_data)
+                        st.dataframe(sim_df, use_container_width=True, hide_index=True)
+                        st.info("Higher similarity scores indicate more overlapping topics/keywords.", icon="💡")
+                    else:
+                        st.info("Could not calculate content similarity (insufficient content or URLs).")
+            else:
+                st.info("No competitor data available for comparison.")
     else:
         st.info("No competitor analysis data available. Please run an audit from the Home page first with competitor URLs.")
 
@@ -1014,16 +1028,21 @@ def main():
         PAGES = {
             "🏠 Home": home_page,
             "📊 Dashboard": dashboard_page,
+            "--- Tools ---": None,
             "🔑 Keyword Research": keyword_research_page,
             "✍️ Content Rewriter": content_rewriter_page,
             "🔗 Backlink Auditor": backlink_auditor_page,
+            "🤖 AI SEO Copilot": ai_copilot_page,
+            "--- Reports ---": None,
             "🧠 Semantic Analysis": semantic_analysis_page,
             "📐 Structure Optimizer": structure_optimizer_page,
             "🔍 Competitor Analysis": competitor_analysis_page,
-            "🤖 AI SEO Copilot": ai_copilot_page,
         }
 
         for page_name, page_func in PAGES.items():
+            if page_func is None:
+                 st.markdown(f"**{page_name}**")
+                 continue
             if st.button(page_name, use_container_width=True, key=f"nav_{page_name}"):
                 st.session_state.page = page_name
                 st.rerun()
@@ -1033,7 +1052,8 @@ def main():
         st.markdown("[GitHub Repo](https://github.com/your-repo-link) | [Feedback](mailto:your.email@example.com)", unsafe_allow_html=True)
 
     page_to_render = PAGES.get(st.session_state.page, home_page)
-    page_to_render()
+    if page_to_render:
+        page_to_render()
 
 if __name__ == "__main__":
     main()
