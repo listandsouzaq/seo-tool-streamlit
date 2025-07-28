@@ -40,7 +40,7 @@ CONFIG = {
     "app": {
         "title": "AI SEO Analyst",
         "icon": "🔮",
-        "version": "14.5", # Version bump for API call fix
+        "version": "14.6", # Version bump for NLTK typo fix
     },
     "theme": {
         "bg_color": "#f0f2f6",
