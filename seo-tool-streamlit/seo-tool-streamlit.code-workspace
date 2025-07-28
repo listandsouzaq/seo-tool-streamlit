@@ -40,7 +40,7 @@ CONFIG = {
     "app": {
         "title": "AI SEO Analyst",
         "icon": "🔮",
-        "version": "14.4", # Version bump for NLTK and prompt fixes
+        "version": "14.5", # Version bump for API call fix
     },
     "theme": {
         "bg_color": "#f0f2f6",
@@ -84,7 +84,6 @@ def setup_nltk():
         ("averaged_perceptron_tagger", "taggers/averaged_perceptron_tagger")
     ]
     
-    # A placeholder to show messages
     info_placeholder = st.empty()
 
     for resource_id, path in resources:
@@ -109,8 +108,9 @@ def configure_ai():
     if api_key:
         try:
             genai.configure(api_key=api_key)
-            # Test a small call to ensure API is working
-            genai.get_model('gemini-1.5-flash').generate_content("test", timeout=5)
+            # Test a small call to ensure API is working by using GenerativeModel
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            model.generate_content("test", request_options={'timeout': 5})
             return True
         except Exception as e:
             st.error(f"Failed to configure AI or connect to Gemini API. Please check your `GEMINI_API_KEY` in `secrets.toml`. Error: {e}", icon="🔑")
@@ -154,7 +154,6 @@ class SEOAuditor:
             if not self._fetch_and_parse_html():
                 return None
             
-            # Re-initialize results to ensure clean state for each run
             self.results = {
                 'performance': self.perf_data,
                 'on_page': self._check_on_page(),
@@ -185,7 +184,6 @@ class SEOAuditor:
                 raise ValueError("Either a URL or HTML content must be provided.")
             
             self.soup = BeautifulSoup(self.html_content, 'html.parser')
-            # Remove scripts, styles, and navigational/structural elements for cleaner text extraction
             for element in self.soup(["script", "style", "noscript", "iframe", "header", "footer", "nav", "aside", "form"]):
                 element.decompose()
             return True
@@ -202,7 +200,6 @@ class SEOAuditor:
         desc_tag = self.soup.find('meta', attrs={'name': 'description'})
         desc_text = desc_tag.get('content', 'Not Found').strip() if desc_tag else "Not Found"
         
-        # Check for multiple H1s
         h1_tags = self.soup.find_all('h1')
         
         return {
@@ -338,7 +335,6 @@ def perform_semantic_analysis(text: str, model, target_keywords: List[str] = Non
     if target_keywords:
         prompt_keywords_section = f"4. Additionally, check if the following target keywords are covered well in the text: {', '.join(target_keywords)}. Comment on their presence and semantic relevance."
 
-    # Conditionally create the list of keys for the JSON output instruction
     keys_for_json = "'summary', 'entities', 'lsi_keywords'"
     if target_keywords:
         keys_for_json += ", 'keyword_coverage'"
@@ -498,7 +494,7 @@ def home_page():
 
             main_auditor = None
             with st.spinner("Step 1/3: Performing Core SEO Audit... 🕵️‍♀️"):
-                if html_input: # Prioritize HTML input
+                if html_input:
                     main_auditor = SEOAuditor(html_content=html_input)
                     st.session_state.analysis_results = main_auditor.run_audit()
                 elif url_input:
@@ -591,9 +587,10 @@ def dashboard_page():
         c3.metric("Word Count", f"{res['content']['word_count']:,}")
         c4.metric("Page Size", f"{res['performance']['size_kb']:.1f} KB")
     
-    tab_onpage, tab_content, tab_tech, tab_semantic, tab_structure, tab_competitor = st.tabs([
+    tabs = st.tabs([
         "📄 On-Page", "📑 Content", "🛠️ Technical", "🧠 Semantic Analysis", "📐 Structure Optimizer", "🔍 Competitor Comparison"
     ])
+    tab_onpage, tab_content, tab_tech, tab_semantic, tab_structure, tab_competitor = tabs
 
     with tab_onpage:
         c1, c2 = st.columns(2)
@@ -664,13 +661,13 @@ def dashboard_page():
             else:
                 st.info("No key entities identified.")
 
-            st.subheader("Suggested LSI (Latent Semantic Indexing) Keywords")
+            st.subheader("Suggested LSI Keywords")
             if sem_res.get('lsi_keywords'):
                 st.table(pd.DataFrame(sem_res['lsi_keywords'], columns=["LSI Keyword"]))
             else:
                 st.info("No LSI keywords suggested.")
             
-            st.subheader("Readability Score (from Semantic Analysis)")
+            st.subheader("Readability Score")
             st.metric("Flesch Reading Ease", f"{sem_res.get('readability_score', 0):.1f}")
 
             if sem_res.get('keyword_coverage'):
@@ -713,7 +710,6 @@ def dashboard_page():
 
                 if len(comp_results_df) > 1 and 'Main Content Text' in comp_results_df.columns:
                     st.subheader("Content Similarity (Target vs. Competitors)")
-                    your_url = comp_results_df.iloc[0]['URL']
                     your_content = comp_results_df.iloc[0]['Main Content Text']
                     similarity_data = []
 
@@ -724,18 +720,18 @@ def dashboard_page():
                             similarity = get_content_similarity(your_content, comp_content)
                             similarity_data.append({"Competitor URL": comp_url, "Similarity Score": similarity})
                         else:
-                            similarity_data.append({"Competitor URL": comp_url, "Similarity Score": "N/A (content not available)"})
+                            similarity_data.append({"Competitor URL": comp_url, "Similarity Score": "N/A"})
                     
                     if similarity_data:
                         sim_df = pd.DataFrame(similarity_data)
                         st.dataframe(sim_df, use_container_width=True, hide_index=True)
                         st.info("Higher similarity scores indicate more overlapping topics/keywords.", icon="💡")
                     else:
-                        st.info("Could not calculate content similarity (insufficient content or URLs).")
+                        st.info("Could not calculate content similarity.")
             else:
                 st.info("No competitor data available for comparison.")
         else:
-            st.info("Competitor analysis not performed. Please run a full analysis from the Home page and provide competitor URLs or target keywords.", icon="ℹ️")
+            st.info("Competitor analysis not performed. Run analysis from Home page.", icon="ℹ️")
     
     if st.button("⬅️ Back to Home"): st.session_state.page = "🏠 Home"; st.rerun()
 
@@ -811,7 +807,7 @@ def content_rewriter_page():
 
 def backlink_auditor_page():
     st.title("🔗 Backlink Auditor")
-    st.info("This tool scrapes Ahrefs' Free Backlink Checker for an overview of the top 100 backlinks. Due to Ahrefs' anti-scraping measures, this may not always work and is for basic insights only.", icon="ℹ️")
+    st.info("This tool scrapes Ahrefs' Free Backlink Checker. Due to anti-scraping measures, this may not always work and is for basic insights only.", icon="ℹ️")
     with st.form("backlink_form"):
         domain_to_check = st.text_input("Enter domain to check backlinks for", placeholder="example.com or https://example.com")
         submitted = st.form_submit_button("Audit Backlinks", type="primary", use_container_width=True)
@@ -824,7 +820,7 @@ def backlink_auditor_page():
                 clean_domain = clean_domain.split('/')[0]
 
                 if not clean_domain:
-                    st.error("Invalid domain or URL entered. Please enter a valid domain like 'example.com'.")
+                    st.error("Invalid domain or URL entered.")
                     return
 
                 with st.spinner(f"Scraping Ahrefs for {clean_domain}..."):
@@ -833,7 +829,7 @@ def backlink_auditor_page():
                     response = requests.get(url, headers=headers, timeout=CONFIG['api']['timeout'])
                     
                     if response.status_code == 403:
-                        st.error(f"Failed to fetch backlinks: Ahrefs blocked the request (403 Forbidden). This can happen with frequent use or if their anti-scraping measures are active.")
+                        st.error(f"Failed to fetch backlinks: Ahrefs blocked the request (403 Forbidden).")
                         st.session_state.backlink_results = []
                         return
 
@@ -844,7 +840,7 @@ def backlink_auditor_page():
                     table = soup.find('table', class_='ahrefs-table') or soup.find('table', class_='_table_1q14v_1')
                     
                     if not table:
-                        st.warning(f"No backlink data table found for '{clean_domain}' on Ahrefs. The domain might be new, have no backlinks, or Ahrefs' HTML structure has changed. Consider checking manually on Ahrefs' free tool.")
+                        st.warning(f"No backlink data table found for '{clean_domain}'. The domain may have no backlinks or Ahrefs' HTML has changed.")
                         st.session_state.backlink_results = []
                         return
                     
@@ -852,27 +848,21 @@ def backlink_auditor_page():
                         cells = row.find_all("td")
                         if len(cells) >= 6:
                             try:
-                                referring_page = cells[0].get_text(strip=True)
-                                dr = cells[1].get_text(strip=True)
-                                ur = cells[2].get_text(strip=True)
-                                traffic = cells[3].get_text(strip=True)
-                                anchor_backlink = cells[5].get_text(strip=True)
-                                
                                 links.append({
-                                    "Referring Page": referring_page,
-                                    "DR": dr,
-                                    "UR": ur,
-                                    "Traffic": traffic,
-                                    "Anchor and Backlink": anchor_backlink,
+                                    "Referring Page": cells[0].get_text(strip=True),
+                                    "DR": cells[1].get_text(strip=True),
+                                    "UR": cells[2].get_text(strip=True),
+                                    "Traffic": cells[3].get_text(strip=True),
+                                    "Anchor and Backlink": cells[5].get_text(strip=True),
                                 })
                             except IndexError:
                                 continue
                     st.session_state.backlink_results = links
                     if not links:
-                        st.info(f"Successfully checked '{clean_domain}', but no backlinks were found in the results table from Ahrefs.")
+                        st.info(f"Successfully checked '{clean_domain}', but no backlinks were found.")
 
             except requests.exceptions.RequestException as e:
-                st.error(f"Failed to fetch backlinks due to a network error: {e}. Ensure the domain is correct and try again.")
+                st.error(f"Failed to fetch backlinks due to a network error: {e}.")
             except Exception as e:
                 st.error(f"An unexpected error occurred during backlink audit: {e}") 
 
@@ -892,7 +882,7 @@ def backlink_auditor_page():
                 fig.update_layout(yaxis={'categoryorder':'total ascending'})
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                st.info("No meaningful anchor text data was found in the returned backlinks.")
+                st.info("No meaningful anchor text data was found.")
         else:
             st.info("No backlink results to display.")
 
@@ -927,16 +917,14 @@ def ai_copilot_page():
                     if st.session_state.structure_results:
                         context_parts.append(f"Structure Optimization Suggestion (Markdown): {st.session_state.structure_results}")
                     if st.session_state.competitor_results:
-                        comp_summary = []
-                        for comp in st.session_state.competitor_results:
-                            comp_summary.append({k: v for k, v in comp.items() if k != 'Main Content Text'})
+                        comp_summary = [{k: v for k, v in comp.items() if k != 'Main Content Text'} for comp in st.session_state.competitor_results]
                         context_parts.append(f"Competitor Analysis Summary (JSON): {json.dumps(comp_summary, indent=2)}")
                     if st.session_state.keyword_results:
                         context_parts.append(f"Keyword Research Data (JSON): {json.dumps(st.session_state.keyword_results, indent=2)}")
 
-                    context = "\n\n".join(context_parts) if context_parts else "No specific audit data available. Please run an analysis first."
+                    context = "\n\n".join(context_parts) if context_parts else "No specific audit data available."
 
-                    full_prompt = f"You are an expert SEO analyst. Based on the following available data (if any), answer the user's question. Provide actionable and concise SEO advice. If specific data is missing for the user's query, state that you need more information.\n\n---Available Data---\n{context}\n\n---User's Question---\n{prompt}"
+                    full_prompt = f"You are an expert SEO analyst. Based on the following available data, answer the user's question. Provide actionable and concise SEO advice. If specific data is missing for the user's query, state that you need more information.\n\n---Available Data---\n{context}\n\n---User's Question---\n{prompt}"
                     
                     response = model.generate_content(full_prompt)
                     ai_response = response.text
@@ -957,7 +945,7 @@ def semantic_analysis_page():
             st.subheader("Key Entities Identified")
             if sem_res.get('entities'): st.table(pd.DataFrame(sem_res['entities'], columns=["Entity"]))
             else: st.info("No key entities identified.")
-            st.subheader("Suggested LSI (Latent Semantic Indexing) Keywords")
+            st.subheader("Suggested LSI Keywords")
             if sem_res.get('lsi_keywords'): st.table(pd.DataFrame(sem_res['lsi_keywords'], columns=["LSI Keyword"]))
             else: st.info("No LSI keywords suggested.")
             st.subheader("Readability Score")
@@ -1012,18 +1000,18 @@ def competitor_analysis_page():
                             similarity = get_content_similarity(your_content, comp_content)
                             similarity_data.append({"Competitor URL": comp_url, "Similarity Score": similarity})
                         else:
-                            similarity_data.append({"Competitor URL": comp_url, "Similarity Score": "N/A (content not available)"})
+                            similarity_data.append({"Competitor URL": comp_url, "Similarity Score": "N/A"})
                     
                     if similarity_data:
                         sim_df = pd.DataFrame(similarity_data)
                         st.dataframe(sim_df, use_container_width=True, hide_index=True)
                         st.info("Higher similarity scores indicate more overlapping topics/keywords.", icon="💡")
                     else:
-                        st.info("Could not calculate content similarity (insufficient content or URLs).")
+                        st.info("Could not calculate content similarity.")
             else:
                 st.info("No competitor data available for comparison.")
     else:
-        st.info("No competitor analysis data available. Please run an audit from the Home page first with competitor URLs.")
+        st.info("No competitor analysis data available. Please run an audit from the Home page first.")
 
 
 # --- MAIN APPLICATION RUNNER ---
@@ -1055,7 +1043,7 @@ def main():
 
         for page_name, page_func in PAGES.items():
             if page_func is None:
-                 st.markdown(f"**{page_name}**")
+                 st.markdown(f"<p style='margin: 0.5em 0 0.5em 0; font-weight: bold; color: {CONFIG['theme']['accent_color']};'>{page_name}</p>", unsafe_allow_html=True)
                  continue
             if st.button(page_name, use_container_width=True, key=f"nav_{page_name}"):
                 st.session_state.page = page_name
