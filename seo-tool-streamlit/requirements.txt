@@ -1,11 +1,11 @@
 streamlit
+google-generativeai
+beautifulsoup4
 requests
 pandas
-google-generativeai
 plotly
-beautifulsoup4
 nltk
 textstat
 extruct
 w3lib
-python-dotenv
+scikit-learn
